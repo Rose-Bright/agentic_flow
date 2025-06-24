@@ -59,3 +59,19 @@ pytest tests/load/
 ## 🚀 Deployment
 
 See [deployment guide](docs/deployment.md) for production setup instructions.
+
+
+For testing, you can use these credentials:
+
+Username: johndoe
+Password: secret
+Example curl command to get a token:
+
+```
+curl -X POST "http://localhost:8000/token" -d "username=johndoe&password=secret" -H "Content-Type: application/x-www-form-urlencoded"
+```
+
+Then use the token in subsequent requests:
+```
+curl -X POST "http://localhost:8000/token" -d "username=johndoe&password=secret" -H "Content-Type: application/x-www-form-urlencoded"
+```
