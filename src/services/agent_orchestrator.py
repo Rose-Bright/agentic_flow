@@ -1,244 +1,503 @@
-from dataclasses import dataclass, field
-from datetime import datetime
-from enum import Enum
-from typing import Dict, List, Optional, Any, Literal
-from src.models.state import (
-    AgentState, 
-    Priority,
-    CustomerTier,
-    Sentiment,
-    TicketStatus,
-    CustomerProfile,
-    Ticket,
-    ConversationTurn,
-    ResolutionAttempt,
-    EscalationRecord
-)
+"""
+Enhanced Agent Orchestrator with LangGraph Integration
+"""
 
-class AgentType(Enum):
-    INTENT_CLASSIFIER = "intent_classifier"
-    TIER1 = "tier1_support"
-    TIER2 = "tier2_technical"
-    TIER3 = "tier3_expert"
-    SALES = "sales_agent"
-    BILLING = "billing_agent"
-    SUPERVISOR = "supervisor_agent"
+from typing import Dict, Any, List, Optional
+from datetime import datetime
+import asyncio
+
+from src.models.state import AgentState, TicketStatus, Sentiment, CustomerTier
+from src.core.langgraph_orchestrator import LangGraphOrchestrator
+from src.core.state_checkpointer import ConversationStateManager
+from src.services.tool_registry import ToolRegistry
+from src.services.performance_monitor import PerformanceMonitor
+from src.core.config import get_settings
+from src.core.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 class AgentOrchestrator:
-    """Main orchestrator for the Contact Center Agentic Flow System"""
+    """Enhanced orchestrator with LangGraph integration for conversation management"""
     
     def __init__(self):
-        self.agents: Dict[AgentType, Any] = {}
-        self.state_manager = StateManager()
-        self.router = AgentRouter()
+        self.settings = get_settings()
+        self.langgraph_orchestrator = LangGraphOrchestrator()
+        self.state_manager = ConversationStateManager()
         self.tool_registry = ToolRegistry()
-        self.monitor = PerformanceMonitor()
+        self.performance_monitor = PerformanceMonitor()
+        self.initialized = False
     
-    async def initialize_agents(self):
-        """Initialize all agent types with their specific configurations"""
-        self.agents = {
-            AgentType.INTENT_CLASSIFIER: await self._create_intent_classifier(),
-            AgentType.TIER1: await self._create_tier1_agent(),
-            AgentType.TIER2: await self._create_tier2_agent(),
-            AgentType.TIER3: await self._create_tier3_agent(),
-            AgentType.SALES: await self._create_sales_agent(),
-            AgentType.BILLING: await self._create_billing_agent(),
-            AgentType.SUPERVISOR: await self._create_supervisor_agent()
-        }
-
-    async def handle_conversation(self, customer_input: str, conversation_id: str = None) -> AgentState:
-        """Handle a new message in the conversation flow"""
+    async def initialize(self):
+        """Initialize all orchestrator components"""
+        if self.initialized:
+            return
+        
+        logger.info("Initializing Agent Orchestrator with LangGraph...")
+        
         try:
-            # Get or create conversation state
-            state = await self.state_manager.get_or_create_state(conversation_id)
+            # Initialize state manager
+            await self.state_manager.initialize()
             
-            # Update state with new message
-            state.current_message = customer_input
-            state.last_activity = datetime.utcnow()
+            # Initialize LangGraph orchestrator
+            await self.langgraph_orchestrator.initialize()
             
-            # If new conversation, get customer context
-            if not state.customer:
-                state.customer = await self._get_customer_context(conversation_id)
+            # Initialize performance monitor
+            await self.performance_monitor.initialize()
             
-            # Classify intent if needed
-            if not state.current_intent or self._should_reclassify_intent(state):
-                intent_result = await self.agents[AgentType.INTENT_CLASSIFIER].classify(
-                    customer_input,
-                    state
-                )
-                state.current_intent = intent_result.intent
-                state.intent_confidence = intent_result.confidence
-            
-            # Determine appropriate agent
-            target_agent_type = await self.router.determine_agent(state)
-            
-            # Execute agent logic
-            response = await self.agents[target_agent_type].handle_message(
-                customer_input,
-                state
-            )
-            
-            # Update state with agent response
-            state = await self._update_state_with_response(state, response, target_agent_type)
-            
-            # Check for escalation needs
-            if await self._should_escalate(state):
-                state = await self._handle_escalation(state)
-            
-            # Monitor and log performance
-            await self.monitor.log_interaction(state)
-            
-            return state
+            self.initialized = True
+            logger.info("Agent Orchestrator initialized successfully")
             
         except Exception as e:
-            await self._handle_error(e, state)
+            logger.error(f"Failed to initialize Agent Orchestrator: {e}")
             raise
     
-    async def _create_intent_classifier(self):
-        """Create intent classification agent with Gemini Pro"""
-        return IntentClassificationAgent(
-            model="gemini-pro",
-            confidence_threshold=0.85,
-            supported_intents=[
-                "account_access",
-                "technical_support",
-                "billing_inquiry",
-                "sales_inquiry",
-                "complaint",
-                "cancellation",
-                "general_inquiry"
-            ],
-            tools=[
-                self.tool_registry.get_tool("get_customer_profile"),
-                self.tool_registry.get_tool("search_knowledge_base"),
-                self.tool_registry.get_tool("log_interaction_metrics")
-            ]
-        )
+    async def process_message(
+        self,
+        message: str,
+        conversation_id: str,
+        customer_id: Optional[str] = None,
+        channel: str = "web",
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """
+        Process a customer message through the LangGraph workflow
+        
+        Args:
+            message: Customer message content
+            conversation_id: Unique conversation identifier
+            customer_id: Customer identifier (optional)
+            channel: Communication channel
+            metadata: Additional metadata
+            
+        Returns:
+            Dict containing response and conversation state
+        """
+        if not self.initialized:
+            await self.initialize()
+        
+        start_time = datetime.now()
+        
+        try:
+            logger.info(f"Processing message for conversation {conversation_id}")
+            
+            # Process through LangGraph workflow
+            result = await self.langgraph_orchestrator.process_conversation(
+                message=message,
+                conversation_id=conversation_id,
+                customer_id=customer_id
+            )
+            
+            # Log performance metrics
+            processing_time = (datetime.now() - start_time).total_seconds()
+            await self._log_performance_metrics(
+                conversation_id=conversation_id,
+                processing_time=processing_time,
+                result=result
+            )
+            
+            # Extract response from result
+            response_data = {
+                "success": result.get("success", True),
+                "message": result.get("response", ""),
+                "conversation_id": conversation_id,
+                "agent_type": result.get("agent_type", "unknown"),
+                "confidence": result.get("confidence", 0.0),
+                "status": result.get("status", "active"),
+                "requires_human": result.get("final_state", {}).get("requires_human", False),
+                "processing_time": processing_time,
+                "metadata": {
+                    "intent": result.get("final_state", {}).get("current_intent", ""),
+                    "sentiment": result.get("final_state", {}).get("sentiment", "neutral"),
+                    "escalation_level": result.get("final_state", {}).get("escalation_level", 0),
+                    "channel": channel,
+                    "timestamp": datetime.now().isoformat()
+                }
+            }
+            
+            # Handle error cases
+            if not result.get("success"):
+                response_data.update({
+                    "error": result.get("error", "Unknown error occurred"),
+                    "error_type": result.get("error_type", "ProcessingError")
+                })
+            
+            logger.info(f"Message processed successfully for conversation {conversation_id}")
+            return response_data
+            
+        except Exception as e:
+            logger.error(f"Error processing message for conversation {conversation_id}: {e}")
+            
+            # Return error response
+            return {
+                "success": False,
+                "message": "I apologize, but I'm experiencing technical difficulties. Please try again in a moment.",
+                "conversation_id": conversation_id,
+                "error": str(e),
+                "error_type": type(e).__name__,
+                "processing_time": (datetime.now() - start_time).total_seconds(),
+                "requires_human": True
+            }
     
-    async def _create_tier1_agent(self):
-        """Create Tier 1 support agent"""
-        return Tier1SupportAgent(
-            model="gemini-pro",
-            capabilities=[
-                "faq_resolution",
-                "basic_troubleshooting",
-                "account_information",
-                "password_reset",
-                "service_status"
-            ],
-            tools=[
-                self.tool_registry.get_tool("get_customer_profile"),
-                self.tool_registry.get_tool("get_account_services"),
-                self.tool_registry.get_tool("search_knowledge_base"),
-                self.tool_registry.get_tool("get_troubleshooting_guide"),
-                self.tool_registry.get_tool("update_ticket_status"),
-                self.tool_registry.get_tool("send_customer_notification")
-            ],
-            escalation_threshold=0.7
-        )
+    async def get_conversation_status(self, conversation_id: str) -> Dict[str, Any]:
+        """Get current status of a conversation"""
+        try:
+            # Get conversation state from LangGraph
+            state = await self.langgraph_orchestrator.get_conversation_state(conversation_id)
+            
+            if not state:
+                return {
+                    "conversation_id": conversation_id,
+                    "status": "not_found",
+                    "message": "Conversation not found"
+                }
+            
+            return {
+                "conversation_id": conversation_id,
+                "status": state.status.value,
+                "current_agent": state.current_agent_type,
+                "escalation_level": state.escalation_level,
+                "sentiment": state.sentiment.value,
+                "confidence": state.confidence_score,
+                "requires_human": state.requires_human,
+                "session_duration": (
+                    datetime.now() - state.session_start
+                ).total_seconds() if state.session_start else 0,
+                "message_count": len(state.conversation_history),
+                "resolution_attempts": len(state.resolution_attempts),
+                "last_activity": state.last_activity.isoformat() if state.last_activity else None
+            }
+            
+        except Exception as e:
+            logger.error(f"Error getting conversation status for {conversation_id}: {e}")
+            return {
+                "conversation_id": conversation_id,
+                "status": "error",
+                "error": str(e)
+            }
     
-    async def _should_escalate(self, state: AgentState) -> bool:
-        """Determine if conversation should be escalated"""
-        escalation_triggers = {
-            "failed_attempts": len(state.resolution_attempts) >= 3,
-            "customer_request": "escalate" in state.current_message.lower(),
-            "low_confidence": state.confidence_score < 0.7,
-            "high_priority": state.ticket and state.ticket.priority == Priority.HIGH,
-            "negative_sentiment": state.sentiment in [Sentiment.NEGATIVE, Sentiment.FRUSTRATED],
-            "sla_risk": state.sla_breach_risk,
-            "vip_customer": state.customer and state.customer.tier == CustomerTier.PLATINUM
+    async def transfer_to_human(
+        self,
+        conversation_id: str,
+        reason: str = "customer_request",
+        priority: str = "medium"
+    ) -> Dict[str, Any]:
+        """Transfer conversation to human agent"""
+        try:
+            logger.info(f"Transferring conversation {conversation_id} to human agent")
+            
+            # Get current state
+            state = await self.langgraph_orchestrator.get_conversation_state(conversation_id)
+            
+            if not state:
+                return {
+                    "success": False,
+                    "message": "Conversation not found",
+                    "conversation_id": conversation_id
+                }
+            
+            # Update state for human transfer
+            state.requires_human = True
+            state.status = TicketStatus.ESCALATED
+            
+            # Add transfer record to escalation history
+            transfer_record = {
+                "from_agent": state.current_agent_type,
+                "to_agent": "human_agent",
+                "timestamp": datetime.now(),
+                "reason": reason,
+                "context_transfer": {
+                    "conversation_summary": await self._generate_conversation_summary(state),
+                    "customer_context": state.customer.__dict__ if state.customer else {},
+                    "priority": priority,
+                    "urgency_indicators": await self._assess_urgency_indicators(state)
+                }
+            }
+            
+            state.escalation_history.append(transfer_record)
+            
+            # Execute transfer tool if available
+            try:
+                await self.tool_registry.execute_tool(
+                    "transfer_to_human_agent",
+                    {
+                        "conversation_id": conversation_id,
+                        "transfer_context": transfer_record["context_transfer"],
+                        "priority": priority,
+                        "reason": reason
+                    },
+                    {"agent_type": "system", "permissions": ["transfer_conversations"]}
+                )
+            except Exception as tool_error:
+                logger.warning(f"Human transfer tool execution failed: {tool_error}")
+            
+            return {
+                "success": True,
+                "message": "Conversation transferred to human agent",
+                "conversation_id": conversation_id,
+                "transfer_id": f"transfer_{conversation_id}_{int(datetime.now().timestamp())}",
+                "priority": priority,
+                "estimated_wait_time": await self._estimate_human_agent_wait_time(priority)
+            }
+            
+        except Exception as e:
+            logger.error(f"Error transferring conversation {conversation_id} to human: {e}")
+            return {
+                "success": False,
+                "message": "Failed to transfer to human agent",
+                "conversation_id": conversation_id,
+                "error": str(e)
+            }
+    
+    async def close_conversation(
+        self,
+        conversation_id: str,
+        reason: str = "resolved",
+        satisfaction_score: Optional[float] = None
+    ) -> Dict[str, Any]:
+        """Close a conversation"""
+        try:
+            logger.info(f"Closing conversation {conversation_id}")
+            
+            # Get current state
+            state = await self.langgraph_orchestrator.get_conversation_state(conversation_id)
+            
+            if not state:
+                return {
+                    "success": False,
+                    "message": "Conversation not found",
+                    "conversation_id": conversation_id
+                }
+            
+            # Update state
+            state.status = TicketStatus.CLOSED
+            
+            # Add final conversation summary
+            conversation_summary = await self._generate_final_conversation_summary(
+                state, reason, satisfaction_score
+            )
+            
+            # Log final metrics
+            await self.performance_monitor.log_conversation_closure(
+                conversation_id=conversation_id,
+                state=state,
+                reason=reason,
+                satisfaction_score=satisfaction_score
+            )
+            
+            # Close conversation in state manager
+            await self.state_manager.close_conversation(conversation_id)
+            
+            return {
+                "success": True,
+                "message": "Conversation closed successfully",
+                "conversation_id": conversation_id,
+                "summary": conversation_summary,
+                "final_status": state.status.value,
+                "duration": (
+                    datetime.now() - state.session_start
+                ).total_seconds() if state.session_start else 0,
+                "resolution_attempts": len(state.resolution_attempts),
+                "satisfaction_score": satisfaction_score
+            }
+            
+        except Exception as e:
+            logger.error(f"Error closing conversation {conversation_id}: {e}")
+            return {
+                "success": False,
+                "message": "Failed to close conversation",
+                "conversation_id": conversation_id,
+                "error": str(e)
+            }
+    
+    async def get_agent_performance_metrics(
+        self,
+        time_range: str = "24h",
+        agent_type: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Get performance metrics for agents"""
+        try:
+            return await self.performance_monitor.get_performance_report(
+                time_range=time_range,
+                agent_type=agent_type
+            )
+            
+        except Exception as e:
+            logger.error(f"Error getting agent performance metrics: {e}")
+            return {
+                "error": str(e),
+                "time_range": time_range,
+                "agent_type": agent_type
+            }
+    
+    async def health_check(self) -> Dict[str, Any]:
+        """Perform system health check"""
+        try:
+            health_status = {
+                "status": "healthy",
+                "timestamp": datetime.now().isoformat(),
+                "components": {}
+            }
+            
+            # Check LangGraph orchestrator
+            try:
+                if self.langgraph_orchestrator.compiled_graph:
+                    health_status["components"]["langgraph"] = "healthy"
+                else:
+                    health_status["components"]["langgraph"] = "not_initialized"
+            except:
+                health_status["components"]["langgraph"] = "error"
+            
+            # Check state manager
+            try:
+                if self.state_manager.checkpointer:
+                    health_status["components"]["state_manager"] = "healthy"
+                else:
+                    health_status["components"]["state_manager"] = "not_initialized"
+            except:
+                health_status["components"]["state_manager"] = "error"
+            
+            # Check tool registry
+            try:
+                tool_count = len(self.tool_registry.tools)
+                health_status["components"]["tool_registry"] = f"healthy ({tool_count} tools)"
+            except:
+                health_status["components"]["tool_registry"] = "error"
+            
+            # Overall status
+            if any(status == "error" for status in health_status["components"].values()):
+                health_status["status"] = "degraded"
+            elif any("not_initialized" in status for status in health_status["components"].values()):
+                health_status["status"] = "initializing"
+            
+            return health_status
+            
+        except Exception as e:
+            logger.error(f"Error in health check: {e}")
+            return {
+                "status": "error",
+                "error": str(e),
+                "timestamp": datetime.now().isoformat()
+            }
+    
+    # Helper methods
+    async def _log_performance_metrics(
+        self,
+        conversation_id: str,
+        processing_time: float,
+        result: Dict[str, Any]
+    ):
+        """Log performance metrics for the conversation"""
+        try:
+            metrics = {
+                "conversation_id": conversation_id,
+                "processing_time": processing_time,
+                "success": result.get("success", True),
+                "agent_type": result.get("agent_type", "unknown"),
+                "confidence": result.get("confidence", 0.0),
+                "timestamp": datetime.now().isoformat()
+            }
+            
+            await self.performance_monitor.log_interaction_metrics(metrics)
+            
+        except Exception as e:
+            logger.error(f"Failed to log performance metrics: {e}")
+    
+    async def _generate_conversation_summary(self, state: AgentState) -> str:
+        """Generate conversation summary for transfer"""
+        summary_parts = [
+            f"Intent: {state.current_intent}",
+            f"Status: {state.status.value}",
+            f"Agent: {state.current_agent_type}",
+            f"Escalation Level: {state.escalation_level}",
+            f"Sentiment: {state.sentiment.value}",
+            f"Messages: {len(state.conversation_history)}",
+            f"Resolution Attempts: {len(state.resolution_attempts)}"
+        ]
+        
+        if state.customer:
+            summary_parts.append(f"Customer Tier: {state.customer.tier.value}")
+        
+        return " | ".join(summary_parts)
+    
+    async def _generate_final_conversation_summary(
+        self,
+        state: AgentState,
+        reason: str,
+        satisfaction_score: Optional[float]
+    ) -> Dict[str, Any]:
+        """Generate final conversation summary"""
+        return {
+            "reason": reason,
+            "final_status": state.status.value,
+            "total_messages": len(state.conversation_history),
+            "resolution_attempts": len(state.resolution_attempts),
+            "escalation_level": state.escalation_level,
+            "agents_involved": list(set(state.previous_agents + [state.current_agent_type])),
+            "tools_used": list(set(state.tools_used)),
+            "duration_seconds": (
+                datetime.now() - state.session_start
+            ).total_seconds() if state.session_start else 0,
+            "satisfaction_score": satisfaction_score,
+            "final_sentiment": state.sentiment.value,
+            "customer_tier": state.customer.tier.value if state.customer else "unknown"
+        }
+    
+    async def _assess_urgency_indicators(self, state: AgentState) -> List[str]:
+        """Assess urgency indicators for human transfer"""
+        indicators = []
+        
+        if state.customer and state.customer.tier == CustomerTier.PLATINUM:
+            indicators.append("vip_customer")
+        
+        if state.sentiment in [Sentiment.NEGATIVE, Sentiment.FRUSTRATED]:
+            indicators.append("negative_sentiment")
+        
+        if state.escalation_level >= 2:
+            indicators.append("multiple_escalations")
+        
+        if len(state.resolution_attempts) >= 3:
+            indicators.append("multiple_failed_attempts")
+        
+        if state.sla_breach_risk:
+            indicators.append("sla_breach_risk")
+        
+        if len(state.error_log) > 0:
+            indicators.append("system_errors")
+        
+        return indicators
+    
+    async def _estimate_human_agent_wait_time(self, priority: str) -> str:
+        """Estimate wait time for human agent based on priority"""
+        # This would typically integrate with workforce management systems
+        wait_times = {
+            "high": "< 5 minutes",
+            "medium": "5-15 minutes", 
+            "low": "15-30 minutes"
         }
         
-        return any(escalation_triggers.values())
+        return wait_times.get(priority, "15-30 minutes")
     
-    async def _handle_escalation(self, state: AgentState) -> AgentState:
-        """Handle conversation escalation"""
-        # Determine escalation level
-        current_level = state.escalation_level
-        next_level = await self.router.determine_escalation_level(state)
-        
-        # Create escalation record
-        escalation = EscalationRecord(
-            from_agent=state.current_agent_type,
-            to_agent=next_level,
-            timestamp=datetime.utcnow(),
-            reason=await self._determine_escalation_reason(state),
-            context_transfer=await self._prepare_context_transfer(state)
-        )
-        
-        # Update state
-        state.escalation_level += 1
-        state.escalation_history.append(escalation)
-        state.previous_agents.append(state.current_agent_type)
-        state.current_agent_type = next_level
-        
-        # Notify relevant parties
-        await self._notify_escalation(state, escalation)
-        
-        return state
-    
-    async def _update_state_with_response(
-        self, 
-        state: AgentState,
-        response: Dict[str, Any],
-        agent_type: AgentType
-    ) -> AgentState:
-        """Update conversation state with agent response"""
-        # Add conversation turn
-        state.conversation_history.append(
-            ConversationTurn(
-                timestamp=datetime.utcnow(),
-                speaker="agent",
-                message=response["message"],
-                intent=state.current_intent,
-                confidence=response.get("confidence", 0.0),
-                agent_type=agent_type.value
-            )
-        )
-        
-        # Update resolution attempts if applicable
-        if "resolution_attempt" in response:
-            state.resolution_attempts.append(
-                ResolutionAttempt(
-                    agent_type=agent_type.value,
-                    timestamp=datetime.utcnow(),
-                    actions_taken=response["actions_taken"],
-                    tools_used=response["tools_used"],
-                    outcome=response["outcome"],
-                    confidence=response["confidence"],
-                    success=response["success"]
-                )
-            )
-        
-        # Update status and metrics
-        state.status = response.get("new_status", state.status)
-        state.confidence_score = response.get("confidence", state.confidence_score)
-        state.customer_satisfaction_risk = response.get(
-            "satisfaction_risk",
-            state.customer_satisfaction_risk
-        )
-        
-        # Update tools used
-        if "tools_used" in response:
-            state.tools_used.extend(response["tools_used"])
-        
-        return state
-
-    async def _handle_error(self, error: Exception, state: Optional[AgentState] = None):
-        """Handle and log errors in conversation flow"""
-        if state:
-            error_log = {
-                "timestamp": datetime.utcnow().isoformat(),
-                "error_type": type(error).__name__,
-                "error_message": str(error),
-                "conversation_id": state.conversation_id,
-                "current_state": state.dict()
-            }
-            state.error_log.append(error_log)
+    async def cleanup(self):
+        """Cleanup orchestrator resources"""
+        try:
+            logger.info("Cleaning up Agent Orchestrator...")
             
-            # Update state to reflect error
-            state.status = TicketStatus.ESCALATED
-            state.should_escalate = True
+            # Cleanup LangGraph orchestrator
+            if self.langgraph_orchestrator:
+                await self.langgraph_orchestrator.cleanup()
             
-            # Log error for monitoring
-            await self.monitor.log_error(error_log)
+            # Cleanup state manager
+            if self.state_manager:
+                await self.state_manager.cleanup()
+            
+            # Cleanup performance monitor
+            if self.performance_monitor:
+                await self.performance_monitor.cleanup()
+            
+            self.initialized = False
+            logger.info("Agent Orchestrator cleanup completed")
+            
+        except Exception as e:
+            logger.error(f"Error during orchestrator cleanup: {e}")
+            raise
