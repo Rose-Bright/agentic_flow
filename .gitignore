@@ -1,0 +1,211 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+env/
+ENV/
+.env
+.venv
+pip-log.txt
+pip-delete-this-directory.txt
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+.settings/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+test-results/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Database
+*.sqlite3
+*.db
+*.rdb
+*.dump
+
+# Certificates and Secrets
+*.pem
+*.key
+*.crt
+*.cer
+*.der
+*.priv
+*.pub
+credentials.json
+client_secrets.json
+service-account.json
+
+# Build & Dependencies
+node_modules/
+bower_components/
+.webassets-cache/
+.sass-cache/
+*.css.map
+*.js.map
+
+# System Files
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*.bak
+*.tmp
+*.temp
+
+# Project Specific
+vertex_ai_cache/
+model_cache/
+.langgraph/
+conversation_logs/
+analytics_data/
+customer_data/
+temp_uploads/
+
+# Development Tools
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytype/
+.ruff_cache/
+
+# Docker
+.docker/
+docker-compose.override.yml
+docker-compose.*.yml
+!docker-compose.yml
+
+# Kubernetes
+kubeconfig
+*.kubeconfig
+k8s/secrets/
+k8s/credentials/
+
+# Documentation
+docs/_build/
+site/
+
+# Performance Testing
+load_test_results/
+performance_reports/
+locust_results/
+
+# Security
+security_scan_results/
+vulnerability_reports/
+penetration_test_results/
+
+# Temporary Files
+tmp/
+temp/
+.temp/
+*.tmp
+*.bak
+*.swp
+*~.nib
+
+# Local Development
+local_settings.py
+local.py
+override.py
+*.local
+
+# Backup Files
+*.bak
+*~
+*.sw[mnpcod]
+*.back.*
+*.back
+
+# Compiled files
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+
+# Distribution / packaging
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+
+# Translations
+*.mo
+*.pot
+
+# Misc
+.git/
+.hg/
+.svn/
+*.orig
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
