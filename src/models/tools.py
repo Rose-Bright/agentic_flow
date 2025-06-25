@@ -12,6 +12,13 @@ class ToolCategory(str, Enum):
     ANALYTICS = "analytics"
     SYSTEM = "system"
 
+class ToolExecutionStatus(str, Enum):
+    SUCCESS = "success"
+    ERROR = "error"
+    TIMEOUT = "timeout"
+    CANCELLED = "cancelled"
+    PENDING = "pending"
+
 class ToolPermission(BaseModel):
     """Model for tool access permissions"""
     tool_name: str = Field(..., description="Tool identifier")
@@ -58,7 +65,7 @@ class ToolExecutionResult(BaseModel):
     """Model for tool execution result"""
     execution_id: str = Field(..., description="Execution identifier")
     tool_name: str = Field(..., description="Tool name")
-    status: str = Field(..., description="Execution status")
+    status: ToolExecutionStatus = Field(..., description="Execution status")
     result: Optional[Dict[str, Any]] = Field(None, description="Execution result")
     error: Optional[Dict[str, Any]] = Field(None, description="Error details if failed")
     start_time: datetime = Field(..., description="Execution start time")
@@ -74,6 +81,9 @@ class ToolExecutionResult(BaseModel):
         if 'result' in values and values['result'] is None and v is None:
             raise ValueError('Must have either result or error')
         return v
+
+# Alias for backward compatibility and API response
+ToolExecutionResponse = ToolExecutionResult
 
 class ToolExecutionLog(BaseModel):
     """Model for tool execution logging"""

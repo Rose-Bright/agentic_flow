@@ -8,7 +8,6 @@ import asyncio
 import json
 
 from ..models.tools import (
-    Tool,
     ToolMetadata,
     ToolPermission,
     ToolExecutionRequest,

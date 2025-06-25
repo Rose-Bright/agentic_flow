@@ -16,6 +16,7 @@ class BaseAgent(ABC):
         self.model = model
         self.capabilities = capabilities
         self.required_tools = tools
+        self.tools = tools or []
         self.confidence_threshold = confidence_threshold
         self.tool_registry: Optional[ToolRegistry] = None
     

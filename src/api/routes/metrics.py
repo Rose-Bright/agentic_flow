@@ -8,7 +8,7 @@ from ...models.metrics import (
     PerformanceMetrics,
     BusinessMetrics
 )
-from ...services.metrics import MetricsService
+from ...services.metrics import MetricsService, get_metrics_service
 from ...core.auth import get_current_user
 from ...core.security import validate_metrics_access
 
@@ -17,7 +17,7 @@ router = APIRouter()
 @router.get("/system", response_model=SystemMetrics)
 async def get_system_metrics(
     current_user = Depends(get_current_user),
-    metrics_service: MetricsService = Depends()
+    metrics_service: MetricsService = Depends(get_metrics_service)
 ):
     """Get current system metrics"""
     try:
@@ -32,7 +32,7 @@ async def get_system_metrics(
 async def get_conversation_metrics(
     time_range: str = "24h",
     current_user = Depends(get_current_user),
-    metrics_service: MetricsService = Depends()
+    metrics_service: MetricsService = Depends(get_metrics_service)
 ):
     """Get conversation-related metrics"""
     try:
@@ -62,7 +62,7 @@ async def get_conversation_metrics(
 @router.get("/performance", response_model=PerformanceMetrics)
 async def get_performance_metrics(
     current_user = Depends(get_current_user),
-    metrics_service: MetricsService = Depends()
+    metrics_service: MetricsService = Depends(get_metrics_service)
 ):
     """Get system performance metrics"""
     try:
@@ -76,7 +76,7 @@ async def get_performance_metrics(
 @router.get("/business", response_model=BusinessMetrics)
 async def get_business_metrics(
     current_user = Depends(get_current_user),
-    metrics_service: MetricsService = Depends()
+    metrics_service: MetricsService = Depends(get_metrics_service)
 ):
     """Get business-related metrics"""
     try:
@@ -97,7 +97,7 @@ async def export_metrics(
     metric_types: List[str],
     format: str = "csv",
     current_user = Depends(get_current_user),
-    metrics_service: MetricsService = Depends()
+    metrics_service: MetricsService = Depends(get_metrics_service)
 ):
     """Export metrics data in specified format"""
     try:

@@ -59,6 +59,7 @@ class SupervisorAgent(BaseAgent):
         tools: List[str] = None,
         confidence_threshold: float = 0.85
     ):
+        self.tools = tools or []
         super().__init__(name, model, capabilities or [], tools or [], confidence_threshold)
         
         # Supervisor-specific capabilities
@@ -528,3 +529,369 @@ class SupervisorAgent(BaseAgent):
         except Exception as e:
             logger.error(f"Human escalation execution failed: {e}")
             return {"success": False, "error": str(e)}
+        
+    async def can_handle(self, state: AgentState) -> bool:
+        """
+        Determine if supervisor intervention is needed based on escalation criteria
+        """
+        logger.info(f"Evaluating supervisor intervention for conversation {state.conversation_id}")
+        
+        try:
+            # Check for explicit escalation conditions
+            escalation_conditions = await self._check_escalation_conditions(state)
+            
+            # Check for performance intervention needs
+            performance_intervention = await self._needs_performance_intervention(state)
+            
+            # Check for quality assurance requirements
+            qa_requirements = await self._needs_quality_assurance(state)
+            
+            # Check for exception handling needs
+            exception_handling = await self._needs_exception_handling_check(state)
+            
+            # Supervisor should handle if any condition is met
+            return any([
+                escalation_conditions,
+                performance_intervention,
+                qa_requirements,
+                exception_handling
+            ])
+            
+        except Exception as e:
+            logger.error(f"Error evaluating supervisor intervention: {e}")
+            # Default to supervisor handling in case of evaluation errors
+            return True
+    
+    async def _check_escalation_conditions(self, state: AgentState) -> bool:
+        """Check if standard escalation conditions are met"""
+        # Multiple failed resolution attempts
+        if len(state.resolution_attempts) >= self.performance_thresholds["max_resolution_attempts"]:
+            return True
+        
+        # Low confidence scores
+        if state.confidence_score < self.performance_thresholds["min_confidence_score"]:
+            return True
+        
+        # Negative sentiment with VIP customers
+        if (state.customer and 
+            state.customer.tier in [CustomerTier.GOLD, CustomerTier.PLATINUM] and
+            state.sentiment_score < self.performance_thresholds["critical_sentiment_threshold"]):
+            return True
+        
+        # SLA breach risk
+        if await self._is_sla_breach_risk(state):
+            return True
+        
+        # System exceptions or errors
+        if state.current_status == TicketStatus.ERROR:
+            return True
+        
+        return False
+    
+    async def _needs_performance_intervention(self, state: AgentState) -> bool:
+        """Check if performance intervention is needed"""
+        # Check if previous agents have failed
+        if len([attempt for attempt in state.resolution_attempts if not attempt.get("success", False)]) >= 2:
+            return True
+        
+        # Check for handling time exceeding thresholds
+        if state.created_at:
+            elapsed_time = datetime.now() - state.created_at
+            if elapsed_time > timedelta(minutes=self.performance_thresholds["max_response_time_minutes"]):
+                return True
+        
+        # Check for repeated routing loops
+        if len(set(attempt.get("agent_type", "") for attempt in state.resolution_attempts)) >= 3:
+            return True
+        
+        return False
+    
+    async def _needs_quality_assurance(self, state: AgentState) -> bool:
+        """Check if quality assurance intervention is needed"""
+        # High-value customer interactions
+        if (state.customer and 
+            state.customer.tier == CustomerTier.PLATINUM and
+            state.priority == Priority.HIGH):
+            return True
+        
+        # Compliance-sensitive intents
+        compliance_intents = [
+            "regulatory_complaint",
+            "privacy_request", 
+            "data_deletion",
+            "legal_inquiry",
+            "accessibility_issue"
+        ]
+        if state.current_intent in compliance_intents:
+            return True
+        
+        # Complex technical issues
+        if state.current_intent and "technical" in state.current_intent.lower():
+            complexity_indicators = len(state.context.get("technical_details", []))
+            if complexity_indicators >= 3:
+                return True
+        
+        return False
+    
+    async def _needs_exception_handling_check(self, state: AgentState) -> bool:
+        """Check if exception handling is needed"""
+        # System-level exceptions
+        if "exception" in state.context.get("error_type", "").lower():
+            return True
+        
+        # Unusual customer behavior patterns
+        if state.context.get("unusual_pattern_detected", False):
+            return True
+        
+        # Business rule violations
+        if state.context.get("business_rule_violation", False):
+            return True
+        
+        return False
+    
+    async def _is_sla_breach_risk(self, state: AgentState) -> bool:
+        """Check if there's a risk of SLA breach"""
+        try:
+            sla_risk_result = await self.tool_registry.execute_tool(
+                "calculate_sla_risk",
+                {
+                    "conversation_id": state.conversation_id,
+                    "customer_tier": state.customer.tier.value if state.customer else "bronze",
+                    "priority": state.priority.value if state.priority else "medium"
+                },
+                self.get_agent_context(state)
+            )
+            
+            risk_score = sla_risk_result.get("data", {}).get("risk_score", 0)
+            return risk_score > 0.7  # High risk threshold
+            
+        except Exception as e:
+            logger.warning(f"SLA risk calculation failed: {e}")
+            # Fallback to time-based check
+            if state.created_at:
+                elapsed_time = datetime.now() - state.created_at
+                warning_threshold = timedelta(minutes=self.performance_thresholds["sla_breach_warning_minutes"])
+                return elapsed_time > warning_threshold
+            
+            return False
+
+
+
+    async def _calculate_sla_risk(self, state: AgentState) -> float:
+        """Calculate SLA breach risk score"""
+        try:
+            if not state.created_at:
+                return 0.0
+            
+            elapsed_time = datetime.now() - state.created_at
+            
+            # Get SLA thresholds based on customer tier
+            sla_threshold = self._get_sla_threshold(state.customer.tier if state.customer else None)
+            
+            # Calculate risk based on elapsed time vs SLA threshold
+            risk_ratio = elapsed_time.total_seconds() / sla_threshold.total_seconds()
+            
+            # Return risk score (0.0 to 1.0)
+            return min(risk_ratio, 1.0)
+            
+        except Exception as e:
+            logger.error(f"Error calculating SLA risk: {e}")
+            return 0.0
+
+    async def _calculate_satisfaction_risk(self, state: AgentState) -> float:
+        """Calculate customer satisfaction risk"""
+        try:
+            # Check sentiment score
+            sentiment_risk = 0.0
+            if state.sentiment_score < 0.3:
+                sentiment_risk = 0.8
+            elif state.sentiment_score < 0.5:
+                sentiment_risk = 0.4
+            
+            # Check number of resolution attempts
+            attempt_risk = min(len(state.resolution_attempts) * 0.2, 1.0)
+            
+            # Combine risks
+            return min(sentiment_risk + attempt_risk, 1.0)
+            
+        except Exception as e:
+            logger.error(f"Error calculating satisfaction risk: {e}")
+            return 0.0
+
+    async def _calculate_escalation_risk(self, state: AgentState) -> float:
+        """Calculate escalation risk"""
+        try:
+            risk_factors = []
+            
+            # Failed resolution attempts
+            if len(state.resolution_attempts) >= 2:
+                risk_factors.append(0.6)
+            
+            # Low confidence scores
+            if state.confidence_score < 0.5:
+                risk_factors.append(0.4)
+            
+            # Negative sentiment
+            if state.sentiment_score < 0.4:
+                risk_factors.append(0.5)
+            
+            # VIP customer with issues
+            if (state.customer and 
+                state.customer.tier in [CustomerTier.GOLD, CustomerTier.PLATINUM]):
+                risk_factors.append(0.3)
+            
+            return min(sum(risk_factors), 1.0)
+            
+        except Exception as e:
+            logger.error(f"Error calculating escalation risk: {e}")
+            return 0.0
+
+    async def _calculate_business_risk(self, state: AgentState) -> float:
+        """Calculate business impact risk"""
+        try:
+            # High-value customer risk
+            customer_risk = 0.0
+            if state.customer and state.customer.tier == CustomerTier.PLATINUM:
+                customer_risk = 0.7
+            elif state.customer and state.customer.tier == CustomerTier.GOLD:
+                customer_risk = 0.4
+            
+            # Priority-based risk
+            priority_risk = 0.0
+            if state.priority == Priority.HIGH:
+                priority_risk = 0.6
+            elif state.priority == Priority.MEDIUM:
+                priority_risk = 0.3
+            
+            return min(customer_risk + priority_risk, 1.0)
+            
+        except Exception as e:
+            logger.error(f"Error calculating business risk: {e}")
+            return 0.0
+
+    async def _calculate_compliance_risk(self, state: AgentState) -> float:
+        """Calculate compliance risk"""
+        try:
+            # Check for compliance-related keywords in conversation
+            compliance_keywords = [
+                "regulatory", "compliance", "legal", "privacy", 
+                "gdpr", "data protection", "security breach"
+            ]
+            
+            conversation_text = " ".join([msg.content for msg in state.messages])
+            
+            for keyword in compliance_keywords:
+                if keyword.lower() in conversation_text.lower():
+                    return 0.8
+            
+            return 0.0
+            
+        except Exception as e:
+            logger.error(f"Error calculating compliance risk: {e}")
+            return 0.0
+
+    async def _calculate_overall_risk_score(self, risks: Dict[str, float]) -> float:
+        """Calculate overall risk score from individual risk components"""
+        try:
+            # Weight different risk types
+            weights = {
+                "sla_breach": 0.3,
+                "customer_satisfaction": 0.25,
+                "escalation": 0.2,
+                "business_impact": 0.15,
+                "compliance": 0.1
+            }
+            
+            total_score = 0.0
+            for risk_type, score in risks.items():
+                if risk_type in weights and isinstance(score, (int, float)):
+                    total_score += score * weights[risk_type]
+            
+            return min(total_score, 1.0)
+            
+        except Exception as e:
+            logger.error(f"Error calculating overall risk score: {e}")
+            return 0.0
+
+    async def _handle_supervisor_error(self, error: Exception, state: AgentState) -> Dict[str, Any]:
+        """Handle supervisor-specific errors"""
+        logger.error(f"Supervisor error for conversation {state.conversation_id}: {error}")
+        
+        try:
+            # Log error details
+            error_details = {
+                "error_type": type(error).__name__,
+                "error_message": str(error),
+                "conversation_id": state.conversation_id,
+                "timestamp": datetime.now().isoformat()
+            }
+            
+            # Attempt graceful fallback
+            fallback_response = {
+                "success": False,
+                "error": "Supervisor encountered an error",
+                "fallback_action": "escalate_to_human",
+                "response": "I apologize, but I'm experiencing a technical issue. Let me connect you with a human agent who can assist you better.",
+                "next_action": "escalate_to_human",
+                "error_details": error_details
+            }
+            
+            # Update state
+            state.current_status = TicketStatus.ERROR
+            state.error_count += 1
+            
+            return fallback_response
+            
+        except Exception as fallback_error:
+            logger.error(f"Error in supervisor error handler: {fallback_error}")
+            return {
+                "success": False,
+                "error": "Critical supervisor error",
+                "next_action": "escalate_to_human"
+            }
+
+    def _get_sla_threshold(self, customer_tier) -> timedelta:
+        """Get SLA threshold based on customer tier"""
+        sla_thresholds = {
+            CustomerTier.PLATINUM: timedelta(minutes=5),
+            CustomerTier.GOLD: timedelta(minutes=10),
+            CustomerTier.SILVER: timedelta(minutes=15),
+            CustomerTier.BRONZE: timedelta(minutes=30)
+        }
+        
+        return sla_thresholds.get(customer_tier, timedelta(minutes=30))
+
+
+    async def _needs_performance_intervention(self, state: AgentState) -> bool:
+        """Check if performance intervention is needed"""
+        # Check if response times are degrading
+        if len(state.resolution_attempts) > 2:
+            return True
+        
+        # Check if confidence scores are low
+        if state.confidence_score < 0.4:
+            return True
+        
+        return False
+
+    async def _needs_quality_assurance(self, state: AgentState) -> bool:
+        """Check if quality assurance is needed"""
+        # Random sampling for QA
+        import random
+        if random.random() < 0.05:  # 5% of conversations
+            return True
+        
+        # VIP customers always get QA
+        if (state.customer and 
+            state.customer.tier in [CustomerTier.GOLD, CustomerTier.PLATINUM]):
+            return True
+        
+        return False
+
+    async def _needs_exception_handling_check(self, state: AgentState) -> bool:
+        """Check if exception handling is needed"""
+        return (
+            state.current_status == TicketStatus.ERROR or
+            state.error_count > 0 or
+            len(state.resolution_attempts) >= 3
+        )
