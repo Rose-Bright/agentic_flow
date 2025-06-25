@@ -7,7 +7,7 @@ CREATE TABLE IF NOT EXISTS conversation_checkpoints (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     thread_id VARCHAR(255) NOT NULL UNIQUE,
     checkpoint_data TEXT NOT NULL,
-    metadata JSONB DEFAULT '{}',
+    custom_metadata JSONB DEFAULT '{}',
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
@@ -94,16 +94,11 @@ BEGIN
     NEW.updated_at = NOW();
     RETURN NEW;
 END;
-$$ language 'plpgsql';
+$$ LANGUAGE plpgsql;
 
 CREATE TRIGGER update_conversation_checkpoints_updated_at 
     BEFORE UPDATE ON conversation_checkpoints 
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
-
--- Add partition for conversation_metrics by date (for better performance with large datasets)
--- This can be enabled later if needed
--- CREATE TABLE conversation_metrics_2024 PARTITION OF conversation_metrics
--- FOR VALUES FROM ('2024-01-01') TO ('2025-01-01');
 
 -- Add constraints and defaults
 ALTER TABLE conversation_checkpoints 
@@ -143,53 +138,3 @@ BEGIN
     RETURN deleted_count;
 END;
 $$ LANGUAGE plpgsql;
-
--- Create view for conversation analytics
-CREATE OR REPLACE VIEW conversation_analytics AS
-SELECT 
-    c.id as conversation_id,
-    c.customer_id,
-    c.channel,
-    c.status,
-    c.priority,
-    c.started_at,
-    c.ended_at,
-    EXTRACT(EPOCH FROM (COALESCE(c.ended_at, NOW()) - c.started_at)) as duration_seconds,
-    COUNT(m.id) as message_count,
-    COUNT(DISTINCT ai.agent_type) as unique_agents_count,
-    AVG(CASE WHEN cm.metric_type = 'confidence_score' THEN cm.metric_value END) as avg_confidence,
-    AVG(CASE WHEN cm.metric_type = 'sentiment_score' THEN cm.metric_value END) as avg_sentiment,
-    COUNT(CASE WHEN ai.success = false THEN 1 END) as error_count,
-    MAX(CASE WHEN cm.metric_type = 'escalation_level' THEN cm.metric_value END) as max_escalation_level
-FROM conversations c
-LEFT JOIN messages m ON c.id = m.conversation_id
-LEFT JOIN agent_interactions ai ON c.id = ai.conversation_id
-LEFT JOIN conversation_metrics cm ON c.id::text = cm.conversation_id
-GROUP BY c.id, c.customer_id, c.channel, c.status, c.priority, c.started_at, c.ended_at;
-
--- Create view for real-time agent performance
-CREATE OR REPLACE VIEW agent_performance_summary AS
-SELECT 
-    agent_type,
-    DATE_TRUNC('hour', timestamp) as hour_bucket,
-    COUNT(*) as total_interactions,
-    COUNT(CASE WHEN success = true THEN 1 END) as successful_interactions,
-    COUNT(CASE WHEN success = false THEN 1 END) as failed_interactions,
-    ROUND(
-        COUNT(CASE WHEN success = true THEN 1 END)::DECIMAL / COUNT(*)::DECIMAL * 100, 
-        2
-    ) as success_rate_percent,
-    AVG(execution_time_ms) as avg_execution_time_ms,
-    PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY execution_time_ms) as p95_execution_time_ms
-FROM agent_performance_log
-WHERE timestamp >= NOW() - INTERVAL '24 hours'
-GROUP BY agent_type, DATE_TRUNC('hour', timestamp)
-ORDER BY hour_bucket DESC, agent_type;
-
--- Grant permissions (adjust according to your user setup)
--- GRANT SELECT, INSERT, UPDATE, DELETE ON conversation_checkpoints TO app_user;
--- GRANT SELECT, INSERT, UPDATE, DELETE ON conversation_writes TO app_user;
--- GRANT SELECT, INSERT, UPDATE, DELETE ON conversation_metrics TO app_user;
--- GRANT SELECT, INSERT, UPDATE, DELETE ON agent_performance_log TO app_user;
--- GRANT SELECT ON conversation_analytics TO app_user;
--- GRANT SELECT ON agent_performance_summary TO app_user;

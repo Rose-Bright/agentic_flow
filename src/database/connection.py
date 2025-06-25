@@ -162,17 +162,52 @@ async def run_migrations():
                         applied_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
                     );
                 """))
+                logger.info("Created schema_migrations table")
                 
-            # Check which migrations have been applied
-            result = await conn.execute(text("SELECT version FROM schema_migrations"))
-            applied_versions = {row[0] for row in result.fetchall()}
-            
-            # Apply migration 002 if not already applied
-            if "002" not in applied_versions:
-                await apply_migration_002(conn)
-                await conn.execute(text("INSERT INTO schema_migrations (version) VALUES ('002')"))
-                logger.info("Applied migration 002: checkpoint tables")
+                # Check if checkpoint tables already exist (from SQLAlchemy)
+                checkpoint_exists = await conn.execute(text("""
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.tables
+                        WHERE table_schema = 'public'
+                        AND table_name = 'conversation_checkpoints'
+                    );
+                """))
         
+                if checkpoint_exists.scalar():
+                    # Tables already exist, just mark migration as applied
+                    await conn.execute(text("INSERT INTO schema_migrations (version) VALUES ('002')"))
+                    logger.info("Marked migration 002 as applied (tables already exist)")
+                else:
+                    # Apply migration normally
+                    await apply_migration_002(conn)
+                    await conn.execute(text("INSERT INTO schema_migrations (version) VALUES ('002')"))
+                    logger.info("Applied migration 002: checkpoint tables")
+            else:
+                # Check which migrations have been applied
+                result = await conn.execute(text("SELECT version FROM schema_migrations"))
+                applied_versions = {row[0] for row in result.fetchall()}
+
+                # Apply migration 002 if not already applied
+                if "002" not in applied_versions:
+                    # Check if tables already exist before applying
+                    checkpoint_exists = await conn.execute(text("""
+                        SELECT EXISTS (
+                            SELECT FROM information_schema.tables
+                            WHERE table_schema = 'public'
+                            AND table_name = 'conversation_checkpoints'
+                        );
+                    """))
+
+                    if checkpoint_exists.scalar():
+                        # Tables already exist, just mark as applied
+                        await conn.execute(text("INSERT INTO schema_migrations (version) VALUES ('002')"))
+                        logger.info("Marked migration 002 as applied (tables already exist)")
+                    else:
+                        # Apply migration normally
+                        await apply_migration_002(conn)
+                        await conn.execute(text("INSERT INTO schema_migrations (version) VALUES ('002')"))
+                        logger.info("Applied migration 002: checkpoint tables")
+
     except Exception as e:
         logger.error(f"Failed to run migrations: {e}")
         raise
