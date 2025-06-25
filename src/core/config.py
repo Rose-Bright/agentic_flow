@@ -41,6 +41,10 @@ class Settings(BaseSettings):
     database_pool_size: int = Field(default=10)
     database_max_overflow: int = Field(default=20)
     
+    # WSL2 - Linux Configuration
+    linux_user: Optional[str] = Field(default=None)
+    linux_pass: Optional[str] = Field(default=None)
+
     # Redis Configuration
     redis_url: str = Field(default="redis://localhost:6379/0")
     redis_max_connections: int = Field(default=10)

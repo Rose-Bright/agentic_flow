@@ -44,6 +44,11 @@ class User(BaseModel):
     updated_at: datetime = Field(default_factory=datetime.utcnow, description="Last update timestamp")
     metadata: Dict[str, Any] = Field(default={}, description="Additional user metadata")
 
+    @property
+    def is_supervisor(self) -> bool:
+        """Check if user is a supervisor"""
+        return "supervisor" in self.roles or self.is_admin
+
     def has_role(self, role: str) -> bool:
         """Check if user has specific role"""
         return role in self.roles or self.is_admin
