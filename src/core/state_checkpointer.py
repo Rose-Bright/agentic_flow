@@ -10,12 +10,11 @@ from dataclasses import asdict
 import pickle
 
 from langgraph.checkpoint.base import BaseCheckpointSaver, Checkpoint, CheckpointMetadata
-from src.models.state import AgentState
+from src.models.state import AgentState, TicketStatus
 from src.cache.redis_client import RedisClient
 from src.database.connection import get_database
 from src.core.config import get_settings
 from src.core.logging import get_logger
-
 logger = get_logger(__name__)
 
 

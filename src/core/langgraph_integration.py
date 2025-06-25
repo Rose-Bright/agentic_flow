@@ -28,6 +28,15 @@ class LangGraphIntegration:
         self.state_manager = None
         self.tool_registry = None
         self.initialized = False
+        # Add these from draft version
+        self.start_time = datetime.now()
+        self.performance_metrics = {
+            "total_conversations": 0,
+            "successful_resolutions": 0,
+            "errors": 0,
+            "average_response_time": 0.0,
+            "response_times": []  # Track individual response times
+        }
         
     async def initialize(self) -> bool:
         """
@@ -72,21 +81,14 @@ class LangGraphIntegration:
         customer_id: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
-        """
-        Process a conversation message through the LangGraph workflow
-        
-        Args:
-            message: Customer message
-            conversation_id: Unique conversation identifier
-            customer_id: Customer identifier (optional)
-            metadata: Additional metadata (optional)
-            
-        Returns:
-            Dict containing response and conversation state
-        """
+        """Process a conversation message through the LangGraph workflow"""
         if not self.initialized:
             raise RuntimeError("LangGraph integration not initialized")
         
+        # Track performance metrics
+        start_time = datetime.now()
+        self.performance_metrics["total_conversations"] += 1
+
         try:
             # Process through orchestrator
             result = await self.orchestrator.process_conversation(
@@ -95,29 +97,45 @@ class LangGraphIntegration:
                 customer_id=customer_id
             )
             
+            # Update performance metrics
+            response_time = (datetime.now() - start_time).total_seconds()
+            self.performance_metrics["response_times"].append(response_time)
+
+            # Keep only last 100 response times for average calculation
+            if len(self.performance_metrics["response_times"]) > 100:
+                self.performance_metrics["response_times"] = self.performance_metrics["response_times"][-100:]
+
+            self.performance_metrics["average_response_time"] = (
+                sum(self.performance_metrics["response_times"]) /
+                len(self.performance_metrics["response_times"])
+            )
+            
+            if result.get("success", True):
+                self.performance_metrics["successful_resolutions"] += 1
+
             # Add integration metadata
             result["integration_metadata"] = {
                 "processed_by": "langgraph_integration",
-                "timestamp": datetime.now().isoformat(),
-                "version": "1.0.0"
-            }
-            
+            "timestamp": datetime.now().isoformat(),
+                "version": "1.0.0",
+                "response_time_seconds": response_time
+        }
+        
             return result
-            
         except Exception as e:
+            self.performance_metrics["errors"] += 1
             logger.error(f"Error processing conversation {conversation_id}: {e}")
             return {
                 "success": False,
                 "error": str(e),
                 "conversation_id": conversation_id,
                 "message": "I apologize, but I'm experiencing technical difficulties. Please try again in a moment."
-            }
-    
+                }
+
     async def get_conversation_state(self, conversation_id: str) -> Optional[Dict[str, Any]]:
         """Get current conversation state"""
         if not self.initialized:
             return None
-            
         try:
             state = await self.orchestrator.get_conversation_state(conversation_id)
             if state:
@@ -142,8 +160,9 @@ class LangGraphIntegration:
         health_status = {
             "status": "healthy",
             "timestamp": datetime.now().isoformat(),
-            "components": {},
-            "integration_initialized": self.initialized
+            "integration_initialized": self.initialized,
+            "uptime_seconds": (datetime.now() - self.start_time).total_seconds(),
+            "components": {}
         }
         
         try:
@@ -193,9 +212,22 @@ class LangGraphIntegration:
             return {"error": "Integration not initialized"}
         
         try:
+            # Enhanced metrics combining both approaches
+            uptime_seconds = (datetime.now() - self.start_time).total_seconds()
+
             metrics = {
                 "timestamp": datetime.now().isoformat(),
-                "integration_uptime": "calculated_if_tracking_start_time",
+                "uptime_seconds": uptime_seconds,
+                "integration_performance": {
+                    "total_conversations": self.performance_metrics["total_conversations"],
+                    "successful_resolutions": self.performance_metrics["successful_resolutions"],
+                    "error_count": self.performance_metrics["errors"],
+                    "success_rate": (
+                        self.performance_metrics["successful_resolutions"] /
+                        max(self.performance_metrics["total_conversations"], 1) * 100
+                    ),
+                    "average_response_time": self.performance_metrics["average_response_time"]
+                },
                 "components": {}
             }
             

@@ -22,9 +22,9 @@ from fastapi.security import OAuth2PasswordRequestForm
 
 class ConversationRequest(BaseModel):
     customer_id: str
-    channel: str = Field(..., regex="^(web|phone|email|mobile|social)$")
+    channel: str = Field(..., pattern="^(web|phone|email|mobile|social)$")
     initial_message: str
-    priority: str = Field(..., regex="^(low|medium|high|critical)$")
+    priority: str = Field(..., pattern="^(low|medium|high|critical)$")
 
 class MessageRequest(BaseModel):
     content: str
