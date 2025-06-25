@@ -9,7 +9,7 @@ from ...models.conversation import (
     MessageResponse,
     ConversationStatus
 )
-from ...services.conversation import ConversationService
+from ...services.conversation import ConversationService, get_conversation_service
 from ...core.auth import get_current_user
 from ...core.security import validate_conversation_access
 
@@ -19,7 +19,7 @@ router = APIRouter()
 async def create_conversation(
     conversation: ConversationCreate,
     current_user = Depends(get_current_user),
-    conversation_service: ConversationService = Depends()
+    conversation_service: ConversationService = Depends(get_conversation_service)
 ):
     """Start a new conversation"""
     try:
@@ -40,7 +40,7 @@ async def send_message(
     conversation_id: str,
     message: MessageCreate,
     current_user = Depends(get_current_user),
-    conversation_service: ConversationService = Depends()
+    conversation_service: ConversationService = Depends(get_conversation_service)
 ):
     """Send a message to an existing conversation"""
     try:
@@ -62,7 +62,7 @@ async def send_message(
 async def get_conversation(
     conversation_id: str,
     current_user = Depends(get_current_user),
-    conversation_service: ConversationService = Depends()
+    conversation_service: ConversationService = Depends(get_conversation_service)
 ):
     """Get conversation details"""
     try:
@@ -86,7 +86,7 @@ async def get_conversation(
 async def get_conversation_status(
     conversation_id: str,
     current_user = Depends(get_current_user),
-    conversation_service: ConversationService = Depends()
+    conversation_service: ConversationService = Depends(get_conversation_service)
 ):
     """Get the current status of a conversation"""
     try:
@@ -110,7 +110,7 @@ async def get_conversation_status(
 async def websocket_endpoint(
     websocket: WebSocket,
     conversation_id: str,
-    conversation_service: ConversationService = Depends()
+    conversation_service: ConversationService = Depends(get_conversation_service)
 ):
     """WebSocket endpoint for real-time conversation updates"""
     try:
@@ -126,7 +126,7 @@ async def websocket_endpoint(
 async def end_conversation(
     conversation_id: str,
     current_user = Depends(get_current_user),
-    conversation_service: ConversationService = Depends()
+    conversation_service: ConversationService = Depends(get_conversation_service)
 ):
     """End an active conversation"""
     try:

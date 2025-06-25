@@ -41,6 +41,15 @@ class ConversationError(APIException):
             code=code
         )
 
+class ConversationNotFoundError(APIException):
+    """Conversation not found error"""
+    def __init__(self, detail: str = "Conversation not found"):
+        super().__init__(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=detail,
+            code="CONVERSATION_NOT_FOUND"
+        )
+
 class AgentError(APIException):
     """Agent-related errors"""
     def __init__(self, detail: str, code: str = "AGENT_ERROR"):
