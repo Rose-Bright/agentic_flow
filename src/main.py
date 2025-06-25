@@ -12,13 +12,22 @@ sys.path.insert(0, root_dir)
 import asyncio
 import logging
 from contextlib import asynccontextmanager
+from datetime import timedelta
 
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.security import OAuth2PasswordRequestForm
 
 from src.api.routes import router as api_router
+from src.api.auth import (
+    authenticate_user, 
+    create_access_token, 
+    ACCESS_TOKEN_EXPIRE_MINUTES,
+    fake_users_db,
+    Token
+)
 from src.core.config import get_settings
 from src.core.logging import setup_logging
 from src.database.connection import init_database
@@ -93,6 +102,22 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
     app.add_middleware(GZipMiddleware, minimum_size=1000)
+    
+    # Add authentication endpoint
+    @app.post("/token", response_model=Token)
+    async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends()):
+        user = authenticate_user(fake_users_db, form_data.username, form_data.password)
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Incorrect username or password",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+        access_token = create_access_token(
+            data={"sub": user.username}, expires_delta=access_token_expires
+        )
+        return {"access_token": access_token, "token_type": "bearer"}
     
     # Include routers
     app.include_router(api_router, prefix=settings.api_prefix)

@@ -1,15 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from typing import List, Optional
-from datetime import datetime
-from pydantic import BaseModel, Field
-from src.models.state import AgentState, ConversationTurn
-from src.services.agent_orchestrator import AgentOrchestrator
-from fastapi import APIRouter, Depends, HTTPException, status
-from typing import List, Optional
 from datetime import datetime, timedelta
 from pydantic import BaseModel, Field
 from src.models.state import AgentState, ConversationTurn
-from src.services.agent_orchestrator import AgentOrchestrator
+from src.services.simple_orchestrator import AgentOrchestrator
 from .auth import (
     oauth2_scheme,
     Token,
@@ -44,30 +38,36 @@ class MessageResponse(BaseModel):
     timestamp: datetime
     confidence_score: float
 
+# Create the main router
 router = APIRouter()
+
 @router.post("/conversations", response_model=ConversationResponse)
 async def start_conversation(
     request: ConversationRequest,
     token: str = Depends(oauth2_scheme)
 ) -> ConversationResponse:
+    """Start a new conversation with the support system"""
     try:
         orchestrator = AgentOrchestrator()
         state = await orchestrator.handle_conversation(
             customer_input=request.initial_message,
-            conversation_id=None
+            conversation_id=None,
+            customer_id=request.customer_id,
+            channel=request.channel,
+            priority=request.priority
         )
 
         return ConversationResponse(
             conversation_id=state.conversation_id,
             agent_type=state.current_agent_type,
-            response=state.current_message,
-            next_steps=state.next_action,
+            response=state.current_message or "Hello! I'm here to help you today.",
+            next_steps=[state.next_action] if state.next_action else None,
             created_at=datetime.utcnow()
         )
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e)
+            detail=f"Failed to start conversation: {str(e)}"
         )
 
 @router.post("/conversations/{conversation_id}/messages", response_model=MessageResponse)
@@ -76,6 +76,7 @@ async def send_message(
     message: MessageRequest,
     token: str = Depends(oauth2_scheme)
 ) -> MessageResponse:
+    """Send a message to an existing conversation"""
     try:
         orchestrator = AgentOrchestrator()
         state = await orchestrator.handle_conversation(
@@ -85,7 +86,7 @@ async def send_message(
 
         return MessageResponse(
             message_id=f"{conversation_id}_{len(state.conversation_history)}",
-            content=state.current_message,
+            content=state.current_message or "I understand your message. Let me help you with that.",
             agent_type=state.current_agent_type,
             timestamp=datetime.utcnow(),
             confidence_score=state.confidence_score
@@ -93,7 +94,7 @@ async def send_message(
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e)
+            detail=f"Failed to send message: {str(e)}"
         )
 
 @router.get("/conversations/{conversation_id}/state", response_model=AgentState)
@@ -101,6 +102,7 @@ async def get_conversation_state(
     conversation_id: str,
     token: str = Depends(oauth2_scheme)
 ) -> AgentState:
+    """Get the current state of a conversation"""
     try:
         orchestrator = AgentOrchestrator()
         state = await orchestrator.get_conversation_state(conversation_id)
@@ -115,12 +117,15 @@ async def get_conversation_state(
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e)
+            detail=f"Failed to get conversation state: {str(e)}"
         )
+
 @router.get("/health")
 async def health_check():
+    """Simple health check endpoint"""
     return {
         "status": "healthy",
         "timestamp": datetime.utcnow().isoformat(),
-        "version": "1.0.0"
+        "version": "1.0.0",
+        "service": "contact-center-api"
     }
