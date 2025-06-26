@@ -22,6 +22,7 @@ from src.agents.tier3_expert_agent import Tier3ExpertAgent
 from src.agents.sales_agent import SalesAgent
 from src.agents.billing_agent import BillingAgent
 from src.agents.supervisor_agent import SupervisorAgent
+from src.agents.telecom_service_agent import TelecomServiceAgent  
 
 logger = get_logger(__name__)
 
@@ -136,6 +137,19 @@ class LangGraphOrchestrator:
             confidence_threshold=0.85
         )
         
+
+        # Add TelecomServiceAgent initialization
+        self.agents['telecom_service'] = TelecomServiceAgent(
+            name="telecom_service",
+            model=self.settings.gemini_pro_model,
+            capabilities=["phone_management", "service_requests", "customer_validation"],
+            tools=[
+                "validate_email", "lookup_customer_by_email", "validate_phone_number",
+                "check_phone_in_profile", "check_service_eligibility", "create_smartpath_ticket",
+                "send_email_reply", "log_customer_interaction"
+            ],
+            confidence_threshold=0.9
+    )
         # Register tool registry with all agents
         for agent in self.agents.values():
             agent.register_tool_registry(self.tool_registry)
@@ -157,6 +171,7 @@ class LangGraphOrchestrator:
         workflow.add_node("sales", self._sales_node)
         workflow.add_node("billing", self._billing_node)
         workflow.add_node("supervisor", self._supervisor_node)
+        workflow.add_node("telecom_service", self._telecom_service_node)  # Add this line
         workflow.add_node("escalation_handler", self._escalation_handler_node)
         workflow.add_node("quality_check", self._quality_check_node)
         workflow.add_node("human_handoff", self._human_handoff_node)
@@ -186,12 +201,13 @@ class LangGraphOrchestrator:
                 "tier3_expert": "tier3_expert",
                 "sales": "sales",
                 "billing": "billing",
+                "telecom_service": "telecom_service",
                 "supervisor": "supervisor"
             }
         )
         
         # Agent processing edges
-        for agent_name in ["tier1_support", "tier2_technical", "tier3_expert", "sales", "billing"]:
+        for agent_name in ["tier1_support", "tier2_technical", "tier3_expert", "sales", "billing", "telecom_service"]:
             workflow.add_conditional_edges(
                 agent_name,
                 self._check_resolution_status,
@@ -344,6 +360,10 @@ class LangGraphOrchestrator:
         """Handle supervisor interactions"""
         return await self._execute_agent_interaction(state, 'supervisor')
     
+    async def _telecom_service_node(self, state: AgentState) -> AgentState:
+        """Handle telecom service interactions"""
+        return await self._execute_agent_interaction(state, 'telecom_service')
+
     async def _execute_agent_interaction(self, state: AgentState, agent_type: str) -> AgentState:
         """Execute interaction with specified agent"""
         logger.info(f"Executing {agent_type} interaction for conversation {state.conversation_id}")
@@ -525,6 +545,7 @@ class LangGraphOrchestrator:
             "tier3_expert": 0.0,
             "sales": 0.0,
             "billing": 0.0,
+            "telecom_service": 0.0, 
             "supervisor": 0.0
         }
         
@@ -534,6 +555,8 @@ class LangGraphOrchestrator:
             "technical": {"tier2_technical": 0.8, "tier1_support": 0.3},
             "billing": {"billing": 0.9, "tier1_support": 0.2},
             "sales": {"sales": 0.9, "tier1_support": 0.1},
+            "phone_service": {"telecom_service": 0.95, "tier1_support": 0.2},  
+            "service_request": {"telecom_service": 0.9, "tier1_support": 0.3},    
             "escalation": {"supervisor": 1.0}
         }
         
@@ -542,7 +565,16 @@ class LangGraphOrchestrator:
         if intent_category in intent_weights:
             for agent, weight in intent_weights[intent_category].items():
                 scores[agent] += weight
-        
+
+        # telecom-specific logic
+        if state.channel and state.channel.value == "email":
+            # Check if message contains phone-related keywords
+            phone_keywords = ["disconnect", "add line", "phone number", "service", "cancel line"]
+            message_lower = state.current_message.lower()
+            
+            if any(keyword in message_lower for keyword in phone_keywords):
+                scores["telecom_service"] += 0.8
+                
         # Customer tier adjustments
         if state.customer:
             tier_multipliers = {
@@ -579,6 +611,9 @@ class LangGraphOrchestrator:
             "payment_issue": "billing",
             "product_inquiry": "sales",
             "upgrade_request": "sales",
+            "phone_disconnect": "phone_service",  
+            "add_phone_line": "phone_service", 
+            "service_request": "service_request",  
             "complaint": "escalation",
             "cancellation": "escalation"
         }

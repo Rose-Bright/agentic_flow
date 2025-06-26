@@ -203,6 +203,8 @@ class SupervisorAgent(BaseAgent):
             "business_impact": await self._assess_business_impact(state)
         }
     
+
+
     async def _analyze_customer_context(self, state: AgentState) -> Dict[str, Any]:
         """Analyze customer context and history"""
         try:
@@ -649,54 +651,8 @@ class SupervisorAgent(BaseAgent):
         
         return False
     
-    async def _is_sla_breach_risk(self, state: AgentState) -> bool:
-        """Check if there's a risk of SLA breach"""
-        try:
-            sla_risk_result = await self.tool_registry.execute_tool(
-                "calculate_sla_risk",
-                {
-                    "conversation_id": state.conversation_id,
-                    "customer_tier": state.customer.tier.value if state.customer else "bronze",
-                    "priority": state.priority.value if state.priority else "medium"
-                },
-                self.get_agent_context(state)
-            )
-            
-            risk_score = sla_risk_result.get("data", {}).get("risk_score", 0)
-            return risk_score > 0.7  # High risk threshold
-            
-        except Exception as e:
-            logger.warning(f"SLA risk calculation failed: {e}")
-            # Fallback to time-based check
-            if state.created_at:
-                elapsed_time = datetime.now() - state.created_at
-                warning_threshold = timedelta(minutes=self.performance_thresholds["sla_breach_warning_minutes"])
-                return elapsed_time > warning_threshold
-            
-            return False
 
 
-
-    async def _calculate_sla_risk(self, state: AgentState) -> float:
-        """Calculate SLA breach risk score"""
-        try:
-            if not state.created_at:
-                return 0.0
-            
-            elapsed_time = datetime.now() - state.created_at
-            
-            # Get SLA thresholds based on customer tier
-            sla_threshold = self._get_sla_threshold(state.customer.tier if state.customer else None)
-            
-            # Calculate risk based on elapsed time vs SLA threshold
-            risk_ratio = elapsed_time.total_seconds() / sla_threshold.total_seconds()
-            
-            # Return risk score (0.0 to 1.0)
-            return min(risk_ratio, 1.0)
-            
-        except Exception as e:
-            logger.error(f"Error calculating SLA risk: {e}")
-            return 0.0
 
     async def _calculate_satisfaction_risk(self, state: AgentState) -> float:
         """Calculate customer satisfaction risk"""
@@ -756,11 +712,12 @@ class SupervisorAgent(BaseAgent):
             elif state.customer and state.customer.tier == CustomerTier.GOLD:
                 customer_risk = 0.4
             
-            # Priority-based risk
+            # Priority-based risk - use getattr with default
+            priority = getattr(state, 'priority', Priority.MEDIUM)
             priority_risk = 0.0
-            if state.priority == Priority.HIGH:
+            if priority == Priority.HIGH:
                 priority_risk = 0.6
-            elif state.priority == Priority.MEDIUM:
+            elif priority == Priority.MEDIUM:
                 priority_risk = 0.3
             
             return min(customer_risk + priority_risk, 1.0)
@@ -778,7 +735,16 @@ class SupervisorAgent(BaseAgent):
                 "gdpr", "data protection", "security breach"
             ]
             
-            conversation_text = " ".join([msg.content for msg in state.messages])
+            # Get conversation text from available sources
+            conversation_text = ""
+            
+            # Try to get from messages (if available)
+            if hasattr(state, 'messages') and state.messages:
+                conversation_text = " ".join([msg.content for msg in state.messages])
+            elif hasattr(state, 'conversation_history') and state.conversation_history:
+                conversation_text = " ".join([turn.message for turn in state.conversation_history])
+            elif hasattr(state, 'current_message') and state.current_message:
+                conversation_text = state.current_message
             
             for keyword in compliance_keywords:
                 if keyword.lower() in conversation_text.lower():
@@ -812,43 +778,6 @@ class SupervisorAgent(BaseAgent):
         except Exception as e:
             logger.error(f"Error calculating overall risk score: {e}")
             return 0.0
-
-    async def _handle_supervisor_error(self, error: Exception, state: AgentState) -> Dict[str, Any]:
-        """Handle supervisor-specific errors"""
-        logger.error(f"Supervisor error for conversation {state.conversation_id}: {error}")
-        
-        try:
-            # Log error details
-            error_details = {
-                "error_type": type(error).__name__,
-                "error_message": str(error),
-                "conversation_id": state.conversation_id,
-                "timestamp": datetime.now().isoformat()
-            }
-            
-            # Attempt graceful fallback
-            fallback_response = {
-                "success": False,
-                "error": "Supervisor encountered an error",
-                "fallback_action": "escalate_to_human",
-                "response": "I apologize, but I'm experiencing a technical issue. Let me connect you with a human agent who can assist you better.",
-                "next_action": "escalate_to_human",
-                "error_details": error_details
-            }
-            
-            # Update state
-            state.current_status = TicketStatus.ERROR
-            state.error_count += 1
-            
-            return fallback_response
-            
-        except Exception as fallback_error:
-            logger.error(f"Error in supervisor error handler: {fallback_error}")
-            return {
-                "success": False,
-                "error": "Critical supervisor error",
-                "next_action": "escalate_to_human"
-            }
 
     def _get_sla_threshold(self, customer_tier) -> timedelta:
         """Get SLA threshold based on customer tier"""
@@ -895,3 +824,539 @@ class SupervisorAgent(BaseAgent):
             state.error_count > 0 or
             len(state.resolution_attempts) >= 3
         )
+    
+
+
+
+
+    async def _analyze_escalation_patterns(self, state: AgentState) -> Dict[str, Any]:
+        """Analyze escalation patterns and history"""
+        try:
+            escalation_analysis = {
+                "previous_escalations": 0,
+                "escalation_frequency": 0.0,
+                "escalation_reasons": [],
+                "escalation_success_rate": 0.0,
+                "time_since_last_escalation": None
+            }
+            
+            # Get escalation history from conversation context
+            if hasattr(state, 'escalation_history') and state.escalation_history:
+                escalation_analysis["previous_escalations"] = len(state.escalation_history)
+                escalation_analysis["escalation_reasons"] = [
+                    escalation.get("reason", "unknown") 
+                    for escalation in state.escalation_history
+                ]
+            
+            # Calculate escalation frequency based on agent history
+            if hasattr(state, 'agent_history') and state.agent_history:
+                total_agents = len(state.agent_history)
+                escalation_count = sum(1 for agent in state.agent_history if agent.get("escalated", False))
+                escalation_analysis["escalation_frequency"] = escalation_count / total_agents if total_agents > 0 else 0.0
+            
+            # Analyze patterns
+            escalation_analysis["risk_indicators"] = await self._identify_escalation_risk_indicators(state)
+            
+            return escalation_analysis
+            
+        except Exception as e:
+            logger.error(f"Error analyzing escalation patterns: {e}")
+            return {
+                "previous_escalations": 0,
+                "escalation_frequency": 0.0,
+                "escalation_reasons": [],
+                "escalation_success_rate": 0.0,
+                "risk_indicators": []
+            }
+
+    async def _identify_escalation_risk_indicators(self, state: AgentState) -> List[str]:
+        """Identify indicators that suggest escalation risk"""
+        indicators = []
+        
+        try:
+            # Check for frustration keywords
+            frustration_keywords = ["frustrated", "angry", "unacceptable", "terrible", "awful", "worst"]
+            conversation_text = ""
+            
+            if hasattr(state, 'current_message') and state.current_message:
+                conversation_text = state.current_message.lower()
+                
+            for keyword in frustration_keywords:
+                if keyword in conversation_text:
+                    indicators.append(f"frustration_keyword_{keyword}")
+            
+            # Check for repeat issues
+            if hasattr(state, 'resolution_attempts') and getattr(state, 'resolution_attempts', 0) > 2:
+                indicators.append("multiple_resolution_attempts")
+            
+            # Check for high-value customer
+            if state.customer and state.customer.tier in [CustomerTier.GOLD, CustomerTier.PLATINUM]:
+                indicators.append("high_value_customer")
+            
+            return indicators
+            
+        except Exception as e:
+            logger.error(f"Error identifying escalation risk indicators: {e}")
+            return []
+        
+
+
+     
+
+
+
+
+    async def _assess_performance_impact(self, state: AgentState) -> Dict[str, Any]:
+        """Assess performance impact of current situation"""
+        try:
+            return {
+                "response_time_impact": await self._calculate_response_time_impact(state),
+                "resource_utilization": await self._calculate_resource_utilization(state),
+                "queue_impact": await self._calculate_queue_impact(state),
+                "agent_workload_impact": await self._calculate_agent_workload_impact(state),
+                "system_performance_impact": await self._calculate_system_performance_impact(state)
+            }
+        except Exception as e:
+            logger.error(f"Error assessing performance impact: {e}")
+            return {"error": str(e), "fallback_assessment": True}
+
+    async def _calculate_response_time_impact(self, state: AgentState) -> float:
+        """Calculate impact on response times"""
+        try:
+            if hasattr(state, 'created_at') and state.created_at:
+                elapsed_time = datetime.now() - state.created_at
+                if elapsed_time > timedelta(minutes=10):
+                    return 0.8
+                elif elapsed_time > timedelta(minutes=5):
+                    return 0.5
+            return 0.2
+        except Exception:
+            return 0.0
+
+    async def _calculate_resource_utilization(self, state: AgentState) -> float:
+        """Calculate current resource utilization impact"""
+        return 0.5  # Placeholder - would integrate with actual resource monitoring
+
+    async def _calculate_queue_impact(self, state: AgentState) -> float:
+        """Calculate impact on queue lengths"""
+        return 0.3  # Placeholder - would integrate with queue monitoring
+
+    async def _calculate_agent_workload_impact(self, state: AgentState) -> float:
+        """Calculate impact on agent workloads"""
+        return 0.4  # Placeholder
+
+    async def _calculate_system_performance_impact(self, state: AgentState) -> float:
+        """Calculate overall system performance impact"""
+        return 0.3  # Placeholder
+
+    async def _calculate_complexity_score(self, state: AgentState) -> float:
+        """Calculate complexity score for the conversation"""
+        try:
+            complexity_factors = []
+            
+            # Number of resolution attempts
+            complexity_factors.append(len(state.resolution_attempts) * 0.2)
+            
+            # Intent complexity
+            complex_intents = ['technical_support', 'billing_dispute', 'compliance_request']
+            if state.current_intent in complex_intents:
+                complexity_factors.append(0.4)
+            
+            # Customer tier (higher tier = potentially more complex needs)
+            if state.customer:
+                tier_complexity = {
+                    CustomerTier.PLATINUM: 0.4,
+                    CustomerTier.GOLD: 0.3,
+                    CustomerTier.SILVER: 0.2,
+                    CustomerTier.BRONZE: 0.1
+                }
+                complexity_factors.append(tier_complexity.get(state.customer.tier, 0.1))
+            
+            return min(sum(complexity_factors), 1.0)
+        except Exception as e:
+            logger.error(f"Error calculating complexity score: {e}")
+            return 0.5
+
+    async def _determine_urgency_level(self, state: AgentState) -> str:
+        """Determine urgency level"""
+        try:
+            urgency_score = 0.0
+            
+            # Priority-based urgency
+            priority = getattr(state, 'priority', Priority.MEDIUM)
+            if priority == Priority.HIGH:
+                urgency_score += 0.6
+            elif priority == Priority.MEDIUM:
+                urgency_score += 0.3
+            
+            # Customer tier urgency
+            if state.customer:
+                if state.customer.tier == CustomerTier.PLATINUM:
+                    urgency_score += 0.4
+                elif state.customer.tier == CustomerTier.GOLD:
+                    urgency_score += 0.2
+            
+            # Sentiment-based urgency
+            if state.sentiment_score < 0.3:
+                urgency_score += 0.3
+            
+            # Time-based urgency
+            if hasattr(state, 'created_at') and state.created_at:
+                elapsed_time = datetime.now() - state.created_at
+                if elapsed_time > timedelta(minutes=30):
+                    urgency_score += 0.4
+            
+            if urgency_score >= 0.8:
+                return "critical"
+            elif urgency_score >= 0.5:
+                return "high"
+            elif urgency_score >= 0.3:
+                return "medium"
+            else:
+                return "low"
+                
+        except Exception as e:
+            logger.error(f"Error determining urgency level: {e}")
+            return "medium"
+
+    async def _assess_business_impact(self, state: AgentState) -> Dict[str, Any]:
+        """Assess business impact"""
+        try:
+            return {
+                "customer_value_impact": await self._calculate_customer_value_impact(state),
+                "revenue_impact": await self._calculate_revenue_impact(state),
+                "reputation_impact": await self._calculate_reputation_impact(state),
+                "compliance_impact": await self._calculate_compliance_impact(state),
+                "operational_impact": await self._calculate_operational_impact(state)
+            }
+        except Exception as e:
+            logger.error(f"Error assessing business impact: {e}")
+            return {"error": str(e)}
+
+    async def _calculate_customer_value_impact(self, state: AgentState) -> float:
+        """Calculate impact on customer value"""
+        if state.customer:
+            tier_impact = {
+                CustomerTier.PLATINUM: 0.9,
+                CustomerTier.GOLD: 0.7,
+                CustomerTier.SILVER: 0.4,
+                CustomerTier.BRONZE: 0.2
+            }
+            return tier_impact.get(state.customer.tier, 0.2)
+        return 0.2
+
+    async def _calculate_revenue_impact(self, state: AgentState) -> float:
+        """Calculate potential revenue impact"""
+        # Placeholder - would integrate with customer value data
+        return 0.3
+
+    async def _calculate_reputation_impact(self, state: AgentState) -> float:
+        """Calculate potential reputation impact"""
+        if state.sentiment_score < 0.3:
+            return 0.8
+        elif state.sentiment_score < 0.6:
+            return 0.4
+        return 0.1
+
+    async def _calculate_compliance_impact(self, state: AgentState) -> float:
+        """Calculate compliance impact"""
+        compliance_intents = ['privacy_request', 'data_deletion', 'compliance_inquiry']
+        if state.current_intent in compliance_intents:
+            return 0.9
+        return 0.1
+
+    async def _calculate_operational_impact(self, state: AgentState) -> float:
+        """Calculate operational impact"""
+        return min(len(state.resolution_attempts) * 0.2, 1.0)
+
+    async def _generate_supervisor_response(
+        self, 
+        state: AgentState, 
+        decision: SupervisorDecision, 
+        execution_result: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Generate comprehensive supervisor response"""
+        try:
+            response_templates = {
+                SupervisorDecision.ESCALATE_TO_HUMAN: {
+                    "message": "I understand this requires special attention. Let me connect you with one of our specialized agents who can provide the expert assistance you need.",
+                    "confidence": 0.95
+                },
+                SupervisorDecision.ASSIGN_AGENT: {
+                    "message": "I've analyzed your request and will connect you with the most suitable agent to help resolve this efficiently.",
+                    "confidence": 0.85
+                },
+                SupervisorDecision.RETRY_WITH_OPTIMIZATION: {
+                    "message": "Let me try a different approach to better address your needs.",
+                    "confidence": 0.75
+                },
+                SupervisorDecision.SCHEDULE_CALLBACK: {
+                    "message": "I'll schedule a callback at your convenience so we can give this the attention it deserves.",
+                    "confidence": 0.8
+                }
+            }
+            
+            template = response_templates.get(decision, {
+                "message": "Let me ensure you receive the best possible assistance.",
+                "confidence": 0.7
+            })
+            
+            return {
+                "message": template["message"],
+                "confidence": template["confidence"],
+                "next_steps": execution_result.get("next_steps", []),
+                "resolution_timeline": execution_result.get("estimated_resolution_time", "within 24 hours")
+            }
+            
+        except Exception as e:
+            logger.error(f"Error generating supervisor response: {e}")
+            return {
+                "message": "I'll make sure you get the help you need.",
+                "confidence": 0.6
+            }
+
+    async def _update_quality_metrics(self, state: AgentState, execution_result: Dict[str, Any]) -> None:
+        """Update quality metrics based on supervisor action"""
+        try:
+            # Update resolution accuracy
+            if execution_result.get("success", False):
+                self.quality_metrics["resolution_accuracy"] = min(
+                    self.quality_metrics["resolution_accuracy"] + 0.1, 1.0
+                )
+            
+            # Update escalation rate
+            if execution_result.get("escalation_required", False):
+                self.quality_metrics["escalation_rate"] = min(
+                    self.quality_metrics["escalation_rate"] + 0.05, 1.0
+                )
+            
+            logger.debug(f"Updated quality metrics: {self.quality_metrics}")
+            
+        except Exception as e:
+            logger.error(f"Error updating quality metrics: {e}")
+
+    async def _log_supervisor_action(
+        self, 
+        state: AgentState, 
+        decision: SupervisorDecision, 
+        execution_result: Dict[str, Any]
+    ) -> None:
+        """Log supervisor action for audit trail"""
+        try:
+            audit_entry = {
+                "timestamp": datetime.now().isoformat(),
+                "conversation_id": state.conversation_id,
+                "supervisor_decision": decision.value,
+                "execution_result": execution_result,
+                "customer_tier": state.customer.tier.value if state.customer else "unknown",
+                "urgency_level": await self._determine_urgency_level(state)
+            }
+            
+            logger.info(f"Supervisor action logged: {audit_entry}")
+            
+        except Exception as e:
+            logger.error(f"Error logging supervisor action: {e}")
+
+    # Add placeholder methods for decision logic
+    async def _should_escalate_to_human(self, state: AgentState, situation_analysis: Dict[str, Any]) -> bool:
+        """Determine if escalation to human is needed"""
+        risk_score = situation_analysis.get("risk_assessment", {}).get("overall_risk_score", 0)
+        return risk_score > 0.7
+
+    async def _should_retry_with_optimization(self, state: AgentState, situation_analysis: Dict[str, Any]) -> bool:
+        """Determine if retry with optimization should be attempted"""
+        return len(state.resolution_attempts) < 2 and state.confidence_score > 0.3
+
+    async def _needs_exception_handling(self, state: AgentState, situation_analysis: Dict[str, Any]) -> bool:
+        """Determine if exception handling is needed"""
+        return state.current_status == TicketStatus.ERROR
+
+    async def _should_schedule_callback(self, state: AgentState, situation_analysis: Dict[str, Any]) -> bool:
+        """Determine if callback should be scheduled"""
+        return False  # Placeholder
+
+    async def _needs_manager_review(self, state: AgentState, situation_analysis: Dict[str, Any]) -> bool:
+        """Determine if manager review is needed"""
+        return (state.customer and 
+                state.customer.tier == CustomerTier.PLATINUM and 
+                len(state.resolution_attempts) > 2)
+
+    async def _can_resolve_directly(self, state: AgentState, situation_analysis: Dict[str, Any]) -> bool:
+        """Determine if supervisor can resolve directly"""
+        return False  # Supervisor typically orchestrates, doesn't resolve directly
+
+    # Add placeholder execution methods
+    async def _execute_optimized_retry(self, state: AgentState, situation_analysis: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute optimized retry"""
+        return {
+            "success": True,
+            "actions_taken": ["optimized_retry"],
+            "next_steps": ["retry_with_enhanced_context"]
+        }
+
+    async def _execute_exception_handling(self, state: AgentState, situation_analysis: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute exception handling"""
+        return {
+            "success": True,
+            "actions_taken": ["exception_handling"],
+            "next_steps": ["error_recovery"]
+        }
+
+    async def _execute_callback_scheduling(self, state: AgentState, situation_analysis: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute callback scheduling"""
+        return {
+            "success": True,
+            "actions_taken": ["callback_scheduled"],
+            "follow_up_scheduled": True
+        }
+
+    async def _execute_resolution_marking(self, state: AgentState, situation_analysis: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute resolution marking"""
+        return {
+            "success": True,
+            "actions_taken": ["marked_resolved"],
+            "resolution_complete": True
+        }
+
+    async def _execute_manager_review_request(self, state: AgentState, situation_analysis: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute manager review request"""
+        return {
+            "success": True,
+            "actions_taken": ["manager_review_requested"],
+            "manager_review_scheduled": True
+        }
+    
+#------------------
+
+    async def _is_sla_breach_risk(self, state: AgentState) -> bool:
+        """Check if there's a risk of SLA breach"""
+        try:
+            sla_risk_result = await self.tool_registry.execute_tool(
+                "calculate_sla_risk",
+                {
+                    "conversation_id": state.conversation_id,
+                    "customer_tier": state.customer.tier.value if state.customer else "bronze",
+                    "priority": getattr(state, 'priority', Priority.MEDIUM).value
+                },
+                self.get_agent_context(state)
+            )
+            
+            risk_score = sla_risk_result.get("data", {}).get("risk_score", 0)
+            return risk_score > 0.7  # High risk threshold
+            
+        except Exception as e:
+            logger.warning(f"SLA risk calculation failed: {e}")
+            # Fallback to time-based check
+            elapsed_time = None
+            
+            if hasattr(state, 'created_at') and state.created_at:
+                elapsed_time = datetime.now() - state.created_at
+            elif state.conversation_history:
+                # Use first message timestamp as fallback - fix the empty iterable issue
+                try:
+                    message_times = [msg.timestamp for msg in state.conversation_history if hasattr(msg, 'timestamp') and msg.timestamp]
+                    if message_times:  # Check if list is not empty
+                        first_message_time = min(message_times)
+                        elapsed_time = datetime.now() - first_message_time
+                    else:
+                        return False  # No valid timestamps found
+                except (ValueError, AttributeError):
+                    return False
+            
+            if elapsed_time:
+                warning_threshold = timedelta(minutes=self.performance_thresholds["sla_breach_warning_minutes"])
+                return elapsed_time > warning_threshold
+            
+            return False
+
+    async def _handle_supervisor_error(self, state: AgentState, error: Exception) -> Dict[str, Any]:
+        """Handle supervisor-specific errors - fix parameter order"""
+        # Get conversation_id safely
+        conversation_id = getattr(state, 'conversation_id', 'unknown')
+        logger.error(f"Supervisor error for conversation {conversation_id}: {error}")
+        
+        try:
+            # Log error details
+            error_details = {
+                "error_type": type(error).__name__,
+                "error_message": str(error),
+                "conversation_id": conversation_id,
+                "timestamp": datetime.now().isoformat()
+            }
+            
+            # Attempt graceful fallback
+            fallback_response = {
+                "success": False,
+                "error": "Supervisor encountered an error",
+                "fallback_action": "escalate_to_human",
+                "message": "I apologize, but I'm experiencing a technical issue. Let me connect you with a human agent who can assist you better.",
+                "next_action": "escalate_to_human",
+                "error_details": error_details,
+                "confidence": 0.0,
+                "escalation_required": True,
+                "human_handoff": True
+            }
+            
+            # Update state safely
+            if hasattr(state, 'current_status'):
+                state.current_status = TicketStatus.ERROR
+            if hasattr(state, 'error_count'):
+                state.error_count += 1
+            else:
+                state.error_count = 1
+            
+            return fallback_response
+            
+        except Exception as fallback_error:
+            logger.error(f"Error in supervisor error handler: {fallback_error}")
+            return {
+                "success": False,
+                "error": "Critical supervisor error",
+                "message": "I apologize for the technical difficulties. Let me escalate this to a human agent.",
+                "next_action": "escalate_to_human",
+                "confidence": 0.0,
+                "escalation_required": True,
+                "human_handoff": True
+            }
+
+    async def _calculate_sla_risk(self, state: AgentState) -> float:
+        """Calculate SLA breach risk"""
+        try:
+            sla_risk_result = await self.tool_registry.execute_tool(
+                "calculate_sla_risk",
+                {
+                    "conversation_id": state.conversation_id,
+                    "customer_tier": state.customer.tier.value if state.customer else "bronze",
+                    "priority": getattr(state, 'priority', Priority.MEDIUM).value
+                },
+                self.get_agent_context(state)
+            )
+            
+            risk_score = sla_risk_result.get("data", {}).get("risk_score", 0)
+            return risk_score
+            
+        except Exception as e:
+            logger.warning(f"SLA risk calculation failed: {e}")
+            # Fallback to time-based check using conversation start time
+            elapsed_time = None
+            
+            if hasattr(state, 'created_at') and state.created_at:
+                elapsed_time = datetime.now() - state.created_at
+            elif state.conversation_history:
+                # Use first message timestamp as fallback - fix empty iterable issue
+                try:
+                    message_times = [msg.timestamp for msg in state.conversation_history if hasattr(msg, 'timestamp') and msg.timestamp]
+                    if message_times:  # Check if list is not empty
+                        first_message_time = min(message_times)
+                        elapsed_time = datetime.now() - first_message_time
+                    else:
+                        return 0.0  # No valid timestamps, return low risk
+                except (ValueError, AttributeError):
+                    return 0.0
+            
+            if elapsed_time:
+                warning_threshold = timedelta(minutes=self.performance_thresholds["sla_breach_warning_minutes"])
+                return 0.8 if elapsed_time > warning_threshold else 0.0
+            
+            return 0.0  # No time reference available, return low risk
+

@@ -1,0 +1,88 @@
+{
+  "telecom_service_agent": {
+    "enabled": true,
+    "name": "TelecomServiceAgent",
+    "description": "Handles email-based phone number service requests",
+    "capabilities": [
+      "email_validation",
+      "phone_number_management",
+      "service_requests",
+      "smartpath_integration",
+      "customer_verification"
+    ],
+    "tools": [
+      "validate_email_format",
+      "lookup_customer_by_email",
+      "send_email_reply",
+      "validate_phone_number",
+      "get_customer_phone_services",
+      "check_disconnect_eligibility",
+      "check_add_line_capacity",
+      "create_smartpath_ticket",
+      "add_ticket_notes",
+      "set_ticket_priority",
+      "get_customer_profile",
+      "update_customer_notes",
+      "log_customer_interaction"
+    ],
+    "permissions": [
+      "read_customer_data",
+      "read_phone_services",
+      "create_tickets",
+      "update_tickets",
+      "send_notifications",
+      "write_analytics",
+      "validate_service_requests"
+    ],
+    "routing_criteria": {
+      "channel": "email",
+      "keywords": ["disconnect", "cancel", "remove", "deactivate", "terminate", "add", "new line", "additional", "activate"],
+      "phone_patterns": [
+        "\\b(\\d{3}[-\\.\\s]?\\d{3}[-\\.\\s]?\\d{4})\\b",
+        "\\b(\\(\\d{3}\\)\\s?\\d{3}[-\\.\\s]?\\d{4})\\b",
+        "\\b(\\+1[-\\.\\s]?\\d{3}[-\\.\\s]?\\d{3}[-\\.\\s]?\\d{4})\\b"
+      ],
+      "confidence_threshold": 0.8
+    },
+    "business_rules": {
+      "max_lines_per_tier": {
+        "bronze": 3,
+        "silver": 5,
+        "gold": 8,
+        "platinum": 10
+      },
+      "priority_mapping": {
+        "platinum": "high",
+        "gold": "medium",
+        "silver": "medium",
+        "bronze": "low"
+      },
+      "sla_hours": {
+        "disconnect": 24,
+        "add": 48
+      }
+    },
+    "email_templates": {
+      "confirmation_subject": "Service Request Confirmed - Ticket #{ticket_id}",
+      "verification_subject": "Verification Required - Service Request",
+      "clarification_subject": "Clarification Needed - Phone Number Request"
+    },
+    "integration": {
+      "smartpath_enabled": true,
+      "customer_db_enabled": true,
+      "email_service_enabled": true,
+      "analytics_enabled": true
+    }
+  },
+  "workflow_updates": {
+    "add_telecom_node": true,
+    "update_routing_scores": true,
+    "add_intent_categories": [
+      "phone_service",
+      "service_request",
+      "phone_disconnect",
+      "phone_add",
+      "line_management"
+    ]
+  }
+}
