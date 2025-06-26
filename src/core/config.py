@@ -81,6 +81,11 @@ class Settings(BaseSettings):
     tool_timeout_seconds: int = Field(default=10)
     cache_ttl_seconds: int = Field(default=3600)
 
+    # LangSmith Configuration
+    langsmith_tracing: bool = Field(default=False)
+    langsmith_endpoint: str = Field(default="https://api.smith.langchain.com")
+    langsmith_api_key: Optional[str] = Field(default=None)
+    langsmith_project: Optional[str] = Field(default=None)
 
 @lru_cache()
 def get_settings() -> Settings:
